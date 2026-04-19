@@ -1,0 +1,85 @@
+seed: 1225
+exp_name: dilated_change_v1
+checkpoint: null
+
+data:
+  _target_: deforestation.datamodule.DeforestationDataModule
+  data_dir: data/makeathon-challenge
+  cache_dir: cache
+  filter_mode: normal  # options: strict | normal | mild
+  train_tiles: null
+  val_tiles: null
+  target_years: [2025]
+  max_pixels_per_tile_year: 500
+  patch_size: 128
+  selected_bands: [16, 23]
+  label_thresholds:
+    radd_positive_conf: 3
+    radd_ignore_conf: 2
+    glads2_min_conf: 3
+    gladl_min_conf: 3
+  batch_size: 512
+  num_workers: 8
+  spatial_eval_every_n_epochs: 1
+
+model:
+  _target_: deforestation.network.DilatedChangeNet
+  in_channels: 6
+  base_channels: 64
+
+module:
+  _target_: deforestation.module.DeforestationModule
+  lr: 0.001
+  weight_decay: 0.0001
+  pos_weight: 1.0
+
+eval:
+  threshold: 0.5
+  sweep_thresholds: false
+  threshold_values: [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
+
+postprocess:
+  min_area_ha: 0.5
+
+submission:
+  prediction_dir: predictions
+  output_path: submission/submission.geojson
+
+inference:
+  device: auto
+  splits: [train, val]
+  target_years: [2025]
+  output_path: null
+  generate_submission: false
+  unique_submission_path: true
+  submission_threshold_split: val
+  submission_tiles: null
+
+trainer:
+  max_epochs: 100
+  accelerator: gpu
+  devices: 1
+  precision: "16-mixed"
+  log_every_n_steps: 50
+  deterministic: false
+
+  callbacks:
+    checkpoint:
+      _target_: pytorch_lightning.callbacks.ModelCheckpoint
+      monitor: val/union_iou
+      mode: max
+      save_top_k: 1
+      filename: "epoch{epoch:03d}-iou{val/union_iou:.4f}"
+      auto_insert_metric_name: false
+
+    lr_monitor:
+      _target_: pytorch_lightning.callbacks.LearningRateMonitor
+      logging_interval: epoch
+
+  logger:
+    _target_: pytorch_lightning.loggers.TensorBoardLogger
+    save_dir: logs
+    name: ${exp_name}
+
+# Example training command:
+# python train.py --config-name config_residual
