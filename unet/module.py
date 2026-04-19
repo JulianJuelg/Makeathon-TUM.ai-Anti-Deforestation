@@ -1,4 +1,5 @@
 """LightningModule for deforestation segmentation training."""
+
 from __future__ import annotations
 
 import torch
@@ -8,6 +9,7 @@ import torchmetrics
 import torch.distributed as dist
 
 import torch.nn.functional as F
+
 
 class DiceLoss(nn.Module):
     def __init__(self, smooth=1e-6):
@@ -30,7 +32,7 @@ class BCEDiceLoss(nn.Module):
     def __init__(self, pos_weight=None, bce_weight=1.0, dice_weight=1.0):
         super().__init__()
         if pos_weight is not None:
-            self.register_buffer('pos_weight', pos_weight)
+            self.register_buffer("pos_weight", pos_weight)
         else:
             self.pos_weight = None
         self.dice = DiceLoss()
@@ -39,16 +41,19 @@ class BCEDiceLoss(nn.Module):
 
     def forward(self, logits, targets, mask=None):
         targets = targets.float()
-        
+
         bce_loss = F.binary_cross_entropy_with_logits(
-            logits, targets, pos_weight=self.pos_weight, reduction='none'
+            logits, targets, pos_weight=self.pos_weight, reduction="none"
         )
         if mask is not None:
             bce_loss = (bce_loss * mask).sum() / (mask.sum() + 1e-8)
         else:
             bce_loss = bce_loss.mean()
 
-        return self.bce_weight * bce_loss + self.dice_weight * self.dice(logits, targets, mask=mask)
+        return self.bce_weight * bce_loss + self.dice_weight * self.dice(
+            logits, targets, mask=mask
+        )
+
 
 class DeforestationModule(pl.LightningModule):
     """Training wrapper for a spatial segmentation network."""
@@ -75,13 +80,15 @@ class DeforestationModule(pl.LightningModule):
         self.loss_fn = BCEDiceLoss(pos_weight=pw)
 
         metric_kwargs = dict(task="binary", threshold=0.5)
-        self.train_f1  = torchmetrics.F1Score(**metric_kwargs)
-        self.val_f1    = torchmetrics.F1Score(**metric_kwargs)
-        self.val_prec  = torchmetrics.Precision(**metric_kwargs)
-        self.val_rec   = torchmetrics.Recall(**metric_kwargs)
+        self.train_f1 = torchmetrics.F1Score(**metric_kwargs)
+        self.val_f1 = torchmetrics.F1Score(**metric_kwargs)
+        self.val_prec = torchmetrics.Precision(**metric_kwargs)
+        self.val_rec = torchmetrics.Recall(**metric_kwargs)
         self.eval_threshold = eval_threshold
         self.sweep_thresholds = sweep_thresholds
-        self.threshold_values = threshold_values or [round(0.10 + 0.05 * i, 2) for i in range(17)]
+        self.threshold_values = threshold_values or [
+            round(0.10 + 0.05 * i, 2) for i in range(17)
+        ]
         self.best_spatial_threshold = eval_threshold
         self.prediction_dir = prediction_dir
         self.submission_output_path = submission_output_path
@@ -102,10 +109,22 @@ class DeforestationModule(pl.LightningModule):
             preds = torch.sigmoid(valid_logits)
             self.train_f1(preds, valid_y.int())
 
-        self.log("train/loss", loss, on_step=True, on_epoch=True,
-                 prog_bar=True, sync_dist=True)
-        self.log("train/f1", self.train_f1, on_step=False, on_epoch=True,
-                 prog_bar=True, sync_dist=True)
+        self.log(
+            "train/loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+        )
+        self.log(
+            "train/f1",
+            self.train_f1,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+        )
         return loss
 
     def validation_step(self, batch, batch_idx: int):
@@ -117,14 +136,22 @@ class DeforestationModule(pl.LightningModule):
         valid_y = y[mask.bool()]
         if len(valid_y) > 0:
             preds = torch.sigmoid(valid_logits)
-            self.val_f1(preds,   valid_y.int())
+            self.val_f1(preds, valid_y.int())
             self.val_prec(preds, valid_y.int())
-            self.val_rec(preds,  valid_y.int())
+            self.val_rec(preds, valid_y.int())
 
-        self.log("val/loss",      loss,          on_epoch=True, prog_bar=True,  sync_dist=True)
-        self.log("val/f1",        self.val_f1,   on_epoch=True, prog_bar=True,  sync_dist=True)
-        self.log("val/precision", self.val_prec, on_epoch=True, prog_bar=False, sync_dist=True)
-        self.log("val/recall",    self.val_rec,  on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log("val/loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val/f1", self.val_f1, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log(
+            "val/precision",
+            self.val_prec,
+            on_epoch=True,
+            prog_bar=False,
+            sync_dist=True,
+        )
+        self.log(
+            "val/recall", self.val_rec, on_epoch=True, prog_bar=False, sync_dist=True
+        )
 
     def on_validation_epoch_end(self):
         if not self.trainer or not hasattr(self.trainer, "datamodule"):
@@ -139,15 +166,17 @@ class DeforestationModule(pl.LightningModule):
         if epoch % every_n != 0 and epoch != last_epoch:
             return
 
-        from deforestation.metrics import (
+        from unet.metrics import (
             TEST_TILES,
             compute_challenge_metrics,
             generate_combined_submission,
             visualize_test_tiles,
         )
-        
+
         eval_years = [2025]
-        thresholds = self.threshold_values if self.sweep_thresholds else self.eval_threshold
+        thresholds = (
+            self.threshold_values if self.sweep_thresholds else self.eval_threshold
+        )
 
         metrics = None
         if self.trainer.is_global_zero:
@@ -175,7 +204,9 @@ class DeforestationModule(pl.LightningModule):
         for k, v in metrics.items():
             self.log(k, v, prog_bar=(k in prog_keys), sync_dist=False)
 
-        self.best_spatial_threshold = float(metrics.get("val/best_threshold", self.eval_threshold))
+        self.best_spatial_threshold = float(
+            metrics.get("val/best_threshold", self.eval_threshold)
+        )
 
         if self.trainer.is_global_zero:
             print(

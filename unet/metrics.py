@@ -12,6 +12,7 @@ The primary IoU metric uses vector polygon union area, matching the benchmark
 description. Year accuracy remains pixel-based because it evaluates the first
 predicted deforestation year.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,7 +25,7 @@ import geopandas as gpd
 import rasterio
 from rasterio.warp import transform_geom
 
-from deforestation.datamodule import (
+from unet.datamodule import (
     _build_def_year_and_ignore,
     _get_dst_grid,
     _load_aef_flat,
@@ -33,7 +34,9 @@ from deforestation.datamodule import (
 TEST_TILES = ["18NVJ_1_6", "18NYH_2_1", "33NTE_5_1", "47QMA_6_2", "48PWA_0_6"]
 
 
-def _normalise_thresholds(threshold: float | list[float] | tuple[float, ...]) -> list[float]:
+def _normalise_thresholds(
+    threshold: float | list[float] | tuple[float, ...],
+) -> list[float]:
     if isinstance(threshold, (list, tuple)):
         return [float(t) for t in threshold]
     return [float(threshold)]
@@ -185,12 +188,25 @@ def _update_totals_from_union_polygons(
             if utm_crs is not None:
                 gdf = gdf.to_crs(utm_crs)
 
-        pred_metric = gdf[gdf["kind"] == "pred"].geometry.iloc[0] if (gdf["kind"] == "pred").any() else None
-        gt_metric = gdf[gdf["kind"] == "gt"].geometry.iloc[0] if (gdf["kind"] == "gt").any() else None
+        pred_metric = (
+            gdf[gdf["kind"] == "pred"].geometry.iloc[0]
+            if (gdf["kind"] == "pred").any()
+            else None
+        )
+        gt_metric = (
+            gdf[gdf["kind"] == "gt"].geometry.iloc[0]
+            if (gdf["kind"] == "gt").any()
+            else None
+        )
 
         pred_area = float(pred_metric.area) if pred_metric is not None else 0.0
         gt_area = float(gt_metric.area) if gt_metric is not None else 0.0
-        if pred_metric is None or gt_metric is None or pred_metric.is_empty or gt_metric.is_empty:
+        if (
+            pred_metric is None
+            or gt_metric is None
+            or pred_metric.is_empty
+            or gt_metric.is_empty
+        ):
             intersection = 0.0
         else:
             intersection = float(pred_metric.intersection(gt_metric).area)
@@ -276,7 +292,7 @@ def _new_totals() -> dict[str, float]:
 
 @torch.no_grad()
 def compute_challenge_metrics(
-    module,           # DeforestationModule (pl.LightningModule)
+    module,  # DeforestationModule (pl.LightningModule)
     val_tiles: list[str],
     aef_dir: str,
     labels_dir: str,
@@ -303,18 +319,25 @@ def compute_challenge_metrics(
             continue
 
         def_year, ignore_mask = _build_def_year_and_ignore(
-            tile, dst_transform, dst_crs, dst_shape,
-            labels_dir, cache_dir=cache_dir,
+            tile,
+            dst_transform,
+            dst_crs,
+            dst_shape,
+            labels_dir,
+            cache_dir=cache_dir,
             label_thresholds=label_thresholds,
             filter_mode=filter_mode,
         )
-        gt_any_raw = (def_year < 9999) & (def_year <= max_year) & ~ignore_mask  # scored gt_union mask
+        gt_any_raw = (
+            (def_year < 9999) & (def_year <= max_year) & ~ignore_mask
+        )  # scored gt_union mask
         gt_geojson = _polygonize_with_submission_utils(
             gt_any_raw.astype(np.uint8), dst_transform, dst_crs, min_area_ha
         )
 
-        aef_2020 = _load_aef_flat(tile, 2020, dst_transform, dst_crs, dst_shape,
-                                   aef_dir, cache_dir=cache_dir)
+        aef_2020 = _load_aef_flat(
+            tile, 2020, dst_transform, dst_crs, dst_shape, aef_dir, cache_dir=cache_dir
+        )
         if aef_2020 is None:
             continue
 
@@ -326,8 +349,15 @@ def compute_challenge_metrics(
         }
 
         for yr in sorted(target_years):
-            aef_yr = _load_aef_flat(tile, yr, dst_transform, dst_crs, dst_shape,
-                                     aef_dir, cache_dir=cache_dir)
+            aef_yr = _load_aef_flat(
+                tile,
+                yr,
+                dst_transform,
+                dst_crs,
+                dst_shape,
+                aef_dir,
+                cache_dir=cache_dir,
+            )
             if aef_yr is None:
                 continue
 
@@ -336,7 +366,12 @@ def compute_challenge_metrics(
                 continue
 
             probs, idx_valid = _predict_valid_probs(
-                module, aef_2020, aef_yr, valid, dst_shape, selected_bands=selected_bands
+                module,
+                aef_2020,
+                aef_yr,
+                valid,
+                dst_shape,
+                selected_bands=selected_bands,
             )
 
             for t, pred_year_flat in pred_year_by_threshold.items():
@@ -380,7 +415,9 @@ def compute_challenge_metrics(
         t: _finalise_totals(totals, prefix="val")
         for t, totals in totals_by_threshold.items()
     }
-    best_threshold = max(thresholds, key=lambda t: metrics_by_threshold[t]["val/union_iou"])
+    best_threshold = max(
+        thresholds, key=lambda t: metrics_by_threshold[t]["val/union_iou"]
+    )
     metrics = dict(metrics_by_threshold[best_threshold])
     metrics["val/best_threshold"] = float(best_threshold)
 
@@ -393,14 +430,22 @@ def compute_challenge_metrics(
     if visual_payload is not None and module.logger is not None:
         import matplotlib.pyplot as plt
 
-        aef_2020_2d = visual_payload["aef_2020"].T.reshape(64, *visual_payload["dst_shape"])
-        aef_rgb = np.stack([_normalise_nan(aef_2020_2d[i]) for i in [7, 13, 52]], axis=-1)
-        pred_geojson = visual_payload["pred_geojson_by_threshold"].get(best_threshold, _empty_feature_collection())
+        aef_2020_2d = visual_payload["aef_2020"].T.reshape(
+            64, *visual_payload["dst_shape"]
+        )
+        aef_rgb = np.stack(
+            [_normalise_nan(aef_2020_2d[i]) for i in [7, 13, 52]], axis=-1
+        )
+        pred_geojson = visual_payload["pred_geojson_by_threshold"].get(
+            best_threshold, _empty_feature_collection()
+        )
         gt_geojson = visual_payload["gt_geojson"]
 
         fig, axes = plt.subplots(1, 3, figsize=(18, 6))
         axes[0].imshow(aef_rgb)
-        axes[0].set_title(f"Embedding (AEF 2020)\nTile {visual_payload['tile']}", fontsize=12)
+        axes[0].set_title(
+            f"Embedding (AEF 2020)\nTile {visual_payload['tile']}", fontsize=12
+        )
         axes[0].axis("off")
 
         _plot_submission_polygons(
@@ -429,10 +474,13 @@ def compute_challenge_metrics(
 
         experiment = getattr(module.logger, "experiment", None)
         if experiment is not None:
-            experiment.add_figure("val/spatial_visualization", fig, global_step=module.current_epoch)
+            experiment.add_figure(
+                "val/spatial_visualization", fig, global_step=module.current_epoch
+            )
         plt.close(fig)
 
     return metrics
+
 
 @torch.no_grad()
 def visualize_test_tiles(
@@ -455,7 +503,8 @@ def visualize_test_tiles(
 
     def normalise_nan(band, p_lo=2, p_hi=98):
         valid_pixels = band[np.isfinite(band)]
-        if len(valid_pixels) == 0: return np.zeros_like(band)
+        if len(valid_pixels) == 0:
+            return np.zeros_like(band)
         lo, hi = np.percentile(valid_pixels, [p_lo, p_hi])
         return np.nan_to_num(np.clip((band - lo) / (hi - lo + 1e-6), 0, 1), nan=0.0)
 
@@ -465,8 +514,9 @@ def visualize_test_tiles(
         except FileNotFoundError:
             continue
 
-        aef_2020 = _load_aef_flat(tile, 2020, dst_transform, dst_crs, dst_shape,
-                                   aef_dir, cache_dir=cache_dir)
+        aef_2020 = _load_aef_flat(
+            tile, 2020, dst_transform, dst_crs, dst_shape, aef_dir, cache_dir=cache_dir
+        )
         if aef_2020 is None:
             continue
 
@@ -474,8 +524,15 @@ def visualize_test_tiles(
         pred_year_flat = np.full(dst_shape[0] * dst_shape[1], 9999, dtype=np.int32)
 
         for yr in sorted(target_years):
-            aef_yr = _load_aef_flat(tile, yr, dst_transform, dst_crs, dst_shape,
-                                     aef_dir, cache_dir=cache_dir)
+            aef_yr = _load_aef_flat(
+                tile,
+                yr,
+                dst_transform,
+                dst_crs,
+                dst_shape,
+                aef_dir,
+                cache_dir=cache_dir,
+            )
             if aef_yr is None:
                 continue
 
@@ -484,10 +541,17 @@ def visualize_test_tiles(
                 continue
 
             probs, idx_valid = _predict_valid_probs(
-                module, aef_2020, aef_yr, valid, dst_shape, selected_bands=selected_bands
+                module,
+                aef_2020,
+                aef_yr,
+                valid,
+                dst_shape,
+                selected_bands=selected_bands,
             )
             pred_positive = probs >= threshold
-            newly_deforested = idx_valid[pred_positive & (pred_year_flat[idx_valid] == 9999)]
+            newly_deforested = idx_valid[
+                pred_positive & (pred_year_flat[idx_valid] == 9999)
+            ]
             pred_year_flat[newly_deforested] = yr
 
         pred_any = pred_year_flat < 9999
@@ -499,10 +563,12 @@ def visualize_test_tiles(
         )
 
         aef_2020_2d = aef_2020.T.reshape(64, dst_shape[0], dst_shape[1])
-        aef_rgb = np.stack([normalise_nan(aef_2020_2d[i]) for i in [7, 13, 52]], axis=-1)
-        
+        aef_rgb = np.stack(
+            [normalise_nan(aef_2020_2d[i]) for i in [7, 13, 52]], axis=-1
+        )
+
         fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-        
+
         axes[0].imshow(aef_rgb)
         axes[0].set_title(f"Input (AEF 2020)\nTest Tile {tile}", fontsize=12)
         axes[0].axis("off")
@@ -516,9 +582,11 @@ def visualize_test_tiles(
         )
         axes[1].set_title(f"Prediction GeoJSON polygons\nTest Tile {tile}", fontsize=12)
         axes[1].axis("off")
-        
+
         plt.tight_layout()
-        module.logger.experiment.add_figure(f"test_visualization/{tile}", fig, global_step=module.current_epoch)
+        module.logger.experiment.add_figure(
+            f"test_visualization/{tile}", fig, global_step=module.current_epoch
+        )
         plt.close(fig)
 
 
@@ -535,8 +603,9 @@ def predict_tile_mask(
     """Predict a binary deforestation mask for one tile."""
     module.eval()
     dst_transform, dst_crs, dst_shape = _get_dst_grid(tile, aef_dir)
-    aef_2020 = _load_aef_flat(tile, 2020, dst_transform, dst_crs, dst_shape,
-                              aef_dir, cache_dir=cache_dir)
+    aef_2020 = _load_aef_flat(
+        tile, 2020, dst_transform, dst_crs, dst_shape, aef_dir, cache_dir=cache_dir
+    )
     if aef_2020 is None:
         return np.zeros(dst_shape, dtype=np.uint8), dst_transform, dst_crs
 
@@ -544,8 +613,9 @@ def predict_tile_mask(
     pred_year_flat = np.full(dst_shape[0] * dst_shape[1], 9999, dtype=np.int32)
 
     for yr in sorted(target_years):
-        aef_yr = _load_aef_flat(tile, yr, dst_transform, dst_crs, dst_shape,
-                                aef_dir, cache_dir=cache_dir)
+        aef_yr = _load_aef_flat(
+            tile, yr, dst_transform, dst_crs, dst_shape, aef_dir, cache_dir=cache_dir
+        )
         if aef_yr is None:
             continue
         valid = valid_base & np.all(np.isfinite(aef_yr), axis=1)
@@ -555,10 +625,16 @@ def predict_tile_mask(
         probs, idx_valid = _predict_valid_probs(
             module, aef_2020, aef_yr, valid, dst_shape, selected_bands=selected_bands
         )
-        newly_deforested = idx_valid[(probs >= threshold) & (pred_year_flat[idx_valid] == 9999)]
+        newly_deforested = idx_valid[
+            (probs >= threshold) & (pred_year_flat[idx_valid] == 9999)
+        ]
         pred_year_flat[newly_deforested] = yr
 
-    return (pred_year_flat < 9999).reshape(dst_shape).astype(np.uint8), dst_transform, dst_crs
+    return (
+        (pred_year_flat < 9999).reshape(dst_shape).astype(np.uint8),
+        dst_transform,
+        dst_crs,
+    )
 
 
 def write_prediction_raster(
